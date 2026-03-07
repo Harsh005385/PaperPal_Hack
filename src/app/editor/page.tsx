@@ -130,7 +130,9 @@ export default function EditorPage() {
       const decoder = new TextDecoder();
       let buffer = "";
 
-      const processLines = (text: string) => {
+      let receivedComplete = false;
+
+      const wrappedProcessLines = (text: string) => {
         let currentEvent = "";
         for (const line of text.split("\n")) {
           if (line.startsWith("event: ")) {
@@ -138,6 +140,9 @@ export default function EditorPage() {
           } else if (line.startsWith("data: ")) {
             try {
               const data = JSON.parse(line.slice(6));
+              if (currentEvent === "complete" || currentEvent === "error") {
+                receivedComplete = true;
+              }
               handleSSEEvent(currentEvent, data);
             } catch {
               // ignore malformed JSON
@@ -149,16 +154,21 @@ export default function EditorPage() {
       while (true) {
         const { done, value } = await reader.read();
         if (done) {
-          if (buffer.trim()) processLines(buffer);
+          if (buffer.trim()) wrappedProcessLines(buffer);
           break;
         }
 
         buffer += decoder.decode(value, { stream: true });
         const lastDoubleNewline = buffer.lastIndexOf("\n\n");
         if (lastDoubleNewline !== -1) {
-          processLines(buffer.slice(0, lastDoubleNewline));
+          wrappedProcessLines(buffer.slice(0, lastDoubleNewline));
           buffer = buffer.slice(lastDoubleNewline + 2);
         }
+      }
+
+      if (!receivedComplete) {
+        setConversionError("Connection closed before conversion completed. Please try again.");
+        setIsConverting(false);
       }
     } catch (err) {
       setConversionError(

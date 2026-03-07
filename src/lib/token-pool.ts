@@ -12,59 +12,39 @@ const MAX_ERRORS_BEFORE_COOLDOWN = 3;
 
 const HF_CHAT_URL = "https://router.huggingface.co/v1/chat/completions";
 
+function loadTokens(): TokenState[] {
+  const envTokens = [
+    process.env.HF_TOKEN_1,
+    process.env.HF_TOKEN_2,
+    process.env.HF_TOKEN_3,
+    process.env.HF_TOKEN_4,
+    process.env.HF_TOKEN_5,
+  ].filter((t): t is string => !!t && t.startsWith("hf_"));
+
+  return envTokens.map((token) => ({
+    token,
+    errorCount: 0,
+    lastUsed: 0,
+    cooldownUntil: 0,
+  }));
+}
+
 class TokenPool {
-  private tokens: TokenState[] = [];
+  private tokens: TokenState[];
   private roundRobinIndex = 0;
 
-  constructor() {
-    const envTokens = [
-      process.env.HF_TOKEN_1,
-      process.env.HF_TOKEN_2,
-      process.env.HF_TOKEN_3,
-      process.env.HF_TOKEN_4,
-      process.env.HF_TOKEN_5,
-    ].filter((t): t is string => !!t && t.startsWith("hf_"));
-
-    this.tokens = envTokens.map((token) => ({
-      token,
-      errorCount: 0,
-      lastUsed: 0,
-      cooldownUntil: 0,
-    }));
-  }
-
-  private getAvailableTokens(): TokenState[] {
-    const now = Date.now();
-    return this.tokens.filter((t) => t.cooldownUntil < now);
+  constructor(tokens: TokenState[]) {
+    this.tokens = tokens;
   }
 
   private getNextToken(): TokenState | null {
-    const available = this.getAvailableTokens();
+    const now = Date.now();
+    const available = this.tokens.filter((t) => t.cooldownUntil < now);
     if (available.length === 0) return null;
 
     const idx = this.roundRobinIndex % available.length;
     this.roundRobinIndex = (this.roundRobinIndex + 1) % available.length;
     return available[idx];
-  }
-
-  markSuccess(token: string) {
-    const state = this.tokens.find((t) => t.token === token);
-    if (state) {
-      state.errorCount = 0;
-      state.lastUsed = Date.now();
-    }
-  }
-
-  markError(token: string) {
-    const state = this.tokens.find((t) => t.token === token);
-    if (state) {
-      state.errorCount++;
-      state.lastUsed = Date.now();
-      if (state.errorCount >= MAX_ERRORS_BEFORE_COOLDOWN) {
-        state.cooldownUntil = Date.now() + COOLDOWN_MS;
-        state.errorCount = 0;
-      }
-    }
   }
 
   async callWithFallback(
@@ -78,7 +58,7 @@ class TokenPool {
 
     if (this.tokens.length === 0) {
       throw new Error(
-        "No HuggingFace tokens configured. Set HF_TOKEN_1..HF_TOKEN_5 in .env.local"
+        "No HuggingFace tokens found. Add HF_TOKEN_1..HF_TOKEN_5 to your environment variables."
       );
     }
 
@@ -115,37 +95,39 @@ class TokenPool {
             const errBody = await res.text();
             const status = res.status;
 
-            this.markError(tokenState.token);
+            tokenState.errorCount++;
+            tokenState.lastUsed = Date.now();
+            if (tokenState.errorCount >= MAX_ERRORS_BEFORE_COOLDOWN) {
+              tokenState.cooldownUntil = Date.now() + COOLDOWN_MS;
+              tokenState.errorCount = 0;
+            }
+
             console.warn(
-              `[TokenPool] ${model.name} returned ${status} with token #${this.tokens.indexOf(tokenState)}: ${errBody.slice(0, 150)}`
+              `[TokenPool] ${model.name} returned ${status}: ${errBody.slice(0, 150)}`
             );
 
-            if (status === 429 || status === 503 || status === 500) {
-              continue;
-            }
-            if (status === 404 || status === 422) {
-              break;
-            }
+            if (status === 429 || status === 503 || status === 500) continue;
+            if (status === 404 || status === 422) break;
             continue;
           }
 
           const data = await res.json();
           const text = data.choices?.[0]?.message?.content || "";
 
-          this.markSuccess(tokenState.token);
+          tokenState.errorCount = 0;
+          tokenState.lastUsed = Date.now();
 
-          const tokenIdx = this.tokens.findIndex(
-            (t) => t.token === tokenState.token
-          );
+          const tokenIdx = this.tokens.indexOf(tokenState);
           return { text, model: model.name, tokenIndex: tokenIdx };
         } catch (err: unknown) {
-          this.markError(tokenState.token);
+          tokenState.errorCount++;
+          tokenState.lastUsed = Date.now();
+          if (tokenState.errorCount >= MAX_ERRORS_BEFORE_COOLDOWN) {
+            tokenState.cooldownUntil = Date.now() + COOLDOWN_MS;
+            tokenState.errorCount = 0;
+          }
           lastError = err instanceof Error ? err : new Error(String(err));
-
-          console.error(
-            `[TokenPool] Network error with ${model.name}:`,
-            lastError.message
-          );
+          console.error(`[TokenPool] Network error with ${model.name}:`, lastError.message);
         }
       }
     }
@@ -164,11 +146,6 @@ class TokenPool {
   }
 }
 
-let poolInstance: TokenPool | null = null;
-
 export function getTokenPool(): TokenPool {
-  if (!poolInstance) {
-    poolInstance = new TokenPool();
-  }
-  return poolInstance;
+  return new TokenPool(loadTokens());
 }

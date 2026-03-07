@@ -160,10 +160,19 @@ export async function POST(req: NextRequest) {
         controller.close();
       } catch (err) {
         const message = err instanceof Error ? err.message : "Unknown error";
-        sendSSE(controller, encoder, "error", {
-          message: `Conversion failed: ${message}`,
-        });
-        controller.close();
+        try {
+          sendSSE(controller, encoder, "error", {
+            message: `Conversion failed: ${message}`,
+          });
+          controller.enqueue(encoder.encode("\n"));
+        } catch {
+          // controller may already be closed
+        }
+        try {
+          controller.close();
+        } catch {
+          // already closed
+        }
       }
     },
   });
