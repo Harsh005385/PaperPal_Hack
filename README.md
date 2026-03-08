@@ -1,8 +1,8 @@
 # PaperPal
 
-**One-click research paper formatting, powered by open-source LLMs.**
+**Instant academic paper formatting — powered by LLMs and rule-based LaTeX generation.**
 
-Upload a `.docx`, `.txt`, or `.tex` file, pick a citation style, and get a publication-ready LaTeX PDF in under a minute. No manual formatting. No copy-pasting into Overleaf. No fighting with margins at 3 AM.
+Upload a research paper, pick a citation style, and get a publication-ready LaTeX PDF. Two pipelines: a fast LLM-driven converter for `.docx`/`.txt`/`.tex` files, and a **Pro pipeline** that parses PDFs with layout-aware extraction and generates LaTeX through pure rule-based code — zero hallucination.
 
 ---
 
@@ -29,11 +29,13 @@ Upload a `.docx`, `.txt`, or `.tex` file, pick a citation style, and get a publi
 
 - [Why PaperPal?](#why-paperpal)
 - [Supported Formats](#supported-formats)
+- [Two Pipelines](#two-pipelines)
 - [Architecture](#architecture)
 - [Tech Stack](#tech-stack)
 - [Getting Started](#getting-started)
 - [How It Works](#how-it-works)
 - [Project Structure](#project-structure)
+- [Deployment](#deployment)
 - [Roadmap](#roadmap)
 - [Team](#team)
 
@@ -41,9 +43,9 @@ Upload a `.docx`, `.txt`, or `.tex` file, pick a citation style, and get a publi
 
 ## Why PaperPal?
 
-Every student has been there — the paper is done, the content is solid, but now you need to reformat it for APA. Or IEEE. Or Vancouver. Manually adjusting margins, citation styles, heading levels, and reference lists eats hours that could go toward actual research.
+Every researcher has been there — the paper is done, the content is solid, but reformatting for APA, IEEE, or Vancouver eats hours. Adjusting margins, citation styles, heading levels, and reference lists manually is tedious work that has nothing to do with actual research.
 
-PaperPal fixes this. Drop in your document, select a format, and the system produces LaTeX output that follows the exact typographic and structural rules of your chosen style. The generated PDF is ready to submit.
+PaperPal automates this entirely. Drop in your document, select a format, and the system produces LaTeX output that follows the exact typographic and structural rules of your chosen style. The generated PDF is ready to submit.
 
 ---
 
@@ -62,69 +64,93 @@ PaperPal fixes this. Drop in your document, select a format, and the system prod
 | **CSE** | Council of Science Editors | Biology, Earth Sciences, Natural Sciences |
 | **Custom** | User-Defined | Any — define your own rules |
 
-Each format has a dedicated master prompt that describes the exact visual and structural expectations — fonts, spacing, heading hierarchy, citation mechanics, reference list formatting. The LLM doesn't guess. It follows a specification.
+Each format has a dedicated master prompt describing the exact visual and structural expectations — fonts, spacing, heading hierarchy, citation mechanics, reference list formatting.
+
+---
+
+## Two Pipelines
+
+### Standard Pipeline
+Upload `.docx`, `.txt`, or `.tex` files. The LLM converts your content into LaTeX for the selected format via Server-Sent Events with real-time progress tracking.
+
+### Pro Pipeline (PDF-to-LaTeX)
+Upload a PDF research paper. The system:
+1. **Extracts content** — text, images, tables, and equations using `unpdf` + `pdfjs-dist`
+2. **Analyzes structure with AI** — sends extracted text to an LLM to identify title, authors, abstract, sections, references, and metadata as structured JSON
+3. **Generates LaTeX with rules** — passes the structured JSON to one of 9 format-specific rule-based LaTeX generators (pure TypeScript, zero LLM calls, zero hallucination)
+4. **Compiles to PDF** — sends the LaTeX to TeXLive.net's free API and returns a compiled PDF
+
+The Pro pipeline is completely isolated from the standard pipeline — separate routes, separate pages, separate code.
 
 ---
 
 ## Architecture
 
 ```
-                              ┌──────────────────────┐
-                              │   Next.js Frontend    │
-                              │   (React 19 + SSR)    │
-                              └──────────┬───────────┘
-                                         │
-                          ┌──────────────┼──────────────┐
-                          ▼              ▼              ▼
-                   ┌────────────┐ ┌────────────┐ ┌────────────┐
-                   │ /api/parse │ │/api/convert│ │ /api/auth  │
-                   │  Document  │ │   LaTeX    │ │  MongoDB   │
-                   │  Parser    │ │ Generator  │ │  JWT Auth  │
-                   └─────┬──────┘ └─────┬──────┘ └────────────┘
-                         │              │
-                         │              ▼
-                         │     ┌─────────────────┐
-                         │     │   Token Pool     │
-                         │     │  (round-robin)   │
-                         │     │  5 HF API keys   │
-                         │     └────────┬────────┘
-                         │              │
-                         ▼              ▼
-                  ┌─────────────┐ ┌──────────────────────────┐
-                  │   Mammoth   │ │  HuggingFace Inference   │
-                  │  .docx/.txt │ │  Qwen 72B ─▶ Llama 70B  │
-                  │  /.tex      │ │  ─▶ Qwen Coder 32B      │
-                  └─────────────┘ │  ─▶ Mixtral 8x7B        │
-                                  │  ─▶ Gemma 2 2B          │
-                                  └──────────┬───────────────┘
+                               ┌───────────────────────────┐
+                               │     Next.js Frontend       │
+                               │     (React 19 + SSR)       │
+                               └─────────────┬─────────────┘
                                              │
-                                             ▼
-                                  ┌──────────────────────┐
-                                  │  LaTeX Assembly      │
-                                  │  Preamble + Sections  │
-                                  │  + Code-based Refs    │
-                                  └──────────┬───────────┘
-                                             │
-                                             ▼
-                                  ┌──────────────────────┐
-                                  │  Browser Preview     │
-                                  │  + Save as PDF       │
-                                  └──────────────────────┘
+                ┌────────────────────────────┼────────────────────────────┐
+                │            STANDARD        │           PRO              │
+                ▼                            │           ▼                │
+    ┌───────────────────┐                    │  ┌─────────────────┐      │
+    │  /api/parse        │                    │  │ /api/pro/parse   │      │
+    │  Mammoth (.docx)   │                    │  │ unpdf (PDF)      │      │
+    │  + .txt / .tex     │                    │  │ Images + Tables  │      │
+    └────────┬──────────┘                    │  │ + Equations      │      │
+             │                               │  └────────┬────────┘      │
+             ▼                               │           ▼               │
+    ┌───────────────────┐                    │  ┌─────────────────┐      │
+    │  /api/convert      │                    │  │ /api/pro/extract │      │
+    │  SSE streaming     │                    │  │ LLM → JSON       │      │
+    │  LLM → LaTeX       │                    │  │ (Edge, SSE)      │      │
+    │  (Edge runtime)    │                    │  └────────┬────────┘      │
+    └────────┬──────────┘                    │           ▼               │
+             │                               │  ┌─────────────────┐      │
+             │                               │  │ Rule-Based       │      │
+             │                               │  │ LaTeX Generators │      │
+             │                               │  │ (9 formats, TS)  │      │
+             │                               │  └────────┬────────┘      │
+             │                               │           ▼               │
+             │                               │  ┌─────────────────┐      │
+             │                               │  │ /api/pro/compile │      │
+             │                               │  │ TeXLive.net API  │      │
+             │                               │  │ LaTeX → PDF      │      │
+             │                               │  └────────┬────────┘      │
+             ▼                               │           ▼               │
+    ┌──────────────────────────────────────────────────────────────────┐
+    │                    Browser Preview + PDF Download                 │
+    └──────────────────────────────────────────────────────────────────┘
+
+    ┌───────────────┐    ┌──────────────────────────────────┐
+    │  Token Pool    │    │  HuggingFace Inference API        │
+    │  5 HF tokens   │───▶│  Qwen 72B → Llama 70B → Mixtral  │
+    │  Round-robin   │    │  → Qwen Coder 32B → Gemma 2B     │
+    └───────────────┘    └──────────────────────────────────┘
+
+    ┌───────────────┐    ┌───────────────┐
+    │  MongoDB Atlas │    │  JWT + bcrypt  │
+    │  User accounts │    │  httpOnly auth │
+    └───────────────┘    └───────────────┘
 ```
 
 ### Key Design Decisions
 
-- **Token round-robin** — 5 HuggingFace API tokens are rotated to avoid per-token rate limits. If a token gets rate-limited (429) or a model returns 503, the pool automatically moves to the next token and model tier.
+- **Token round-robin** — 5 HuggingFace API tokens rotate to avoid per-token rate limits. Rate-limited (429) or unavailable (503) tokens automatically cycle to the next.
 
-- **Model fallback chain** — Qwen 72B is tried first for best quality. If unavailable, it falls through Llama 3.3 70B, Qwen Coder 32B, Mixtral 8x7B, and finally Gemma 2 2B.
+- **Model fallback chain** — Qwen 72B → Llama 3.3 70B → Qwen Coder 32B → Mixtral 8x7B → Gemma 2 2B. Best quality is tried first, with automatic fallback.
 
-- **Code-based references** — References and bibliography entries are parsed and formatted programmatically, not by the LLM. This eliminates hallucinated citations entirely.
+- **Rule-based LaTeX generation (Pro)** — Each of the 9 citation formats has a dedicated TypeScript generator (150–340 lines each) encoding the exact formatting rules. No LLM is involved in LaTeX code generation — eliminating hallucinated citations, duplicate content, and formatting errors.
 
-- **Chunked processing** — Long documents are split into ~2000-character chunks and processed in parallel batches of 3, then stitched together into a single LaTeX document.
+- **Code-based references** — References and bibliography entries are parsed and formatted programmatically in both pipelines.
 
-- **Anti-hallucination guards** — Strict grounding rules are injected into every prompt. The LLM reformats existing content without inventing text, fake authors, or placeholder references.
+- **Anti-hallucination guards** — Strict grounding rules are injected into every LLM prompt. The LLM reformats existing content without inventing text, fake authors, or placeholder references.
 
-- **JWT + MongoDB auth** — Users sign up with first name, last name, email, and password. Passwords are hashed with bcrypt. Sessions are managed via JWT tokens stored in httpOnly cookies and localStorage.
+- **Edge runtime for streaming** — The `/api/convert` and `/api/pro/extract` routes use the Vercel Edge runtime, enabling SSE streaming without the 10-second Node.js timeout limit.
+
+- **JSON repair** — The Pro pipeline includes a `repairTruncatedJSON()` function that can fix common LLM output issues (unclosed strings, unbalanced braces) and a full fallback parser for when JSON parsing fails entirely.
 
 ---
 
@@ -137,11 +163,13 @@ Each format has a dedicated master prompt that describes the exact visual and st
 | Styling | [Tailwind CSS 4](https://tailwindcss.com/) |
 | Animations | [Framer Motion](https://motion.dev/) |
 | Icons | [Lucide React](https://lucide.dev/) |
-| Document Parsing | [Mammoth](https://github.com/mwilliamson/mammoth.js) (DOCX to text) |
+| Document Parsing | [Mammoth](https://github.com/mwilliamson/mammoth.js) (DOCX), [unpdf](https://github.com/nicolo-ribaudo/unpdf) (PDF) |
+| PDF Content Extraction | unpdf + pdfjs-dist (text, images, tables, equations) |
 | LLM Inference | [HuggingFace Inference API](https://huggingface.co/docs/api-inference/) |
+| LaTeX Compilation | [TeXLive.net](https://texlive.net/) (free, no API key) |
 | Database | [MongoDB Atlas](https://www.mongodb.com/atlas) via [Mongoose](https://mongoosejs.com/) |
 | Auth | [JWT](https://jwt.io/) + [bcryptjs](https://github.com/dcodeIO/bcrypt.js) |
-| PDF Generation | Browser print dialog (Save as PDF) |
+| Deployment | [Vercel](https://vercel.com/) |
 
 ---
 
@@ -157,8 +185,8 @@ Each format has a dedicated master prompt that describes the exact visual and st
 ### Installation
 
 ```bash
-git clone https://github.com/your-username/PaperPal.git
-cd PaperPal
+git clone https://github.com/davesohamm/PaperPal_Hack.git
+cd PaperPal_Hack
 npm install
 ```
 
@@ -168,10 +196,10 @@ npm install
 cp .env.example .env.local
 ```
 
-Edit `.env.local` with your credentials:
+Edit `.env.local`:
 
 ```env
-# HuggingFace tokens (use 1-5, more = fewer rate limits)
+# HuggingFace tokens (1-5, more = fewer rate limits)
 HF_TOKEN_1=hf_your_first_token
 HF_TOKEN_2=hf_your_second_token
 HF_TOKEN_3=hf_your_third_token
@@ -204,12 +232,16 @@ The system works with as few as 1 token, but rate limits will be hit more often.
 ### Running Locally
 
 ```bash
-npm run dev
+# On Windows, increase memory for large builds:
+$env:NODE_OPTIONS="--max-old-space-size=4096"; npm run dev
+
+# On macOS/Linux:
+NODE_OPTIONS="--max-old-space-size=4096" npm run dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000).
 
-For production:
+For production build:
 
 ```bash
 npm run build
@@ -220,63 +252,112 @@ npm start
 
 ## How It Works
 
-1. **Pick a format** — Choose from 10 citation styles. Each tile shows the full name, typical fields, and a citation example.
+### Standard Pipeline
 
-2. **Upload your document** — Drag and drop a `.docx`, `.txt`, or `.tex` file. The server extracts the title, abstract, body sections, and references.
+1. **Pick a format** — Choose from 10 citation styles on the formats page
+2. **Upload your document** — Drag and drop a `.docx`, `.txt`, or `.tex` file
+3. **AI conversion** — Text is chunked and sent to HuggingFace LLMs via SSE streaming with real-time progress
+4. **LaTeX assembly** — Preamble is generated first, body chunks are converted, references are formatted by code (not LLM)
+5. **Preview and download** — Split-pane editor with raw LaTeX on the left, rendered preview on the right
 
-3. **AI conversion** — Extracted text is chunked and sent to HuggingFace LLMs via Server-Sent Events. You see real-time progress — which model is processing, which chunk, overall percentage.
+### Pro Pipeline (PDF input)
 
-4. **LaTeX assembly** — Preamble is generated first (document class, packages, formatting commands for the chosen style). Body chunks are converted next. References are formatted by code, not by the LLM.
-
-5. **Preview and edit** — Split-pane editor: raw LaTeX on the left, rendered preview on the right. Toggle between code-only, preview-only, or split view.
-
-6. **Download as PDF** — Opens a print-ready view. Browser's "Save as PDF" produces the final file.
+1. **Upload PDF** at `/pro/upload` — select target format, upload your source PDF
+2. **PDF parsing** — `unpdf` + `pdfjs-dist` extracts text per page, detects images (with pixel data), tables (heuristic column alignment), and equations (regex pattern matching)
+3. **AI structure extraction** — Extracted text is sent to the LLM to produce a compact structured JSON: title, authors, abstract, keywords, sections, references, metadata
+4. **Section enrichment** — The LLM's compact summaries are enriched with full text from the original extraction by matching section headings back to the source
+5. **Rule-based LaTeX generation** — The appropriate format generator (e.g., `ieee.ts`, `apa.ts`) converts the structured features into complete, compilable LaTeX — no LLM involved
+6. **Compilation** — LaTeX is sent to TeXLive.net's free API, which returns a compiled PDF
+7. **Editor** — Split view with editable LaTeX code, PDF preview, download buttons for both `.tex` and `.pdf`
 
 ---
 
 ## Project Structure
 
 ```
-PaperPal/
+PaperPal_Hack/
 ├── public/
 │   └── favicon.svg
-├── images/                          # Demo screenshots
+├── images/                              # Demo screenshots
 ├── src/
 │   ├── app/
 │   │   ├── api/
-│   │   │   ├── auth/
-│   │   │   │   ├── route.ts         # Unified signin/signup
-│   │   │   │   ├── me/route.ts      # Token verification
-│   │   │   │   └── logout/route.ts  # Cookie clear
-│   │   │   ├── convert/route.ts     # LaTeX generation (SSE)
-│   │   │   └── parse/route.ts       # Document parsing
-│   │   ├── auth/page.tsx            # Sign in / Sign up page
-│   │   ├── editor/page.tsx          # LaTeX editor + preview
-│   │   ├── formats/page.tsx         # Format selection
-│   │   ├── upload/page.tsx          # File upload
-│   │   ├── page.tsx                 # Landing page
-│   │   ├── globals.css
-│   │   └── layout.tsx               # Root layout + AuthProvider
+│   │   │   ├── auth/                    # Authentication routes
+│   │   │   │   ├── route.ts             # Unified auth endpoint
+│   │   │   │   ├── signin/route.ts      # Sign in
+│   │   │   │   ├── signup/route.ts      # Sign up
+│   │   │   │   ├── me/route.ts          # Token verification
+│   │   │   │   └── logout/route.ts      # Cookie clear
+│   │   │   ├── parse/route.ts           # Document parsing (Mammoth)
+│   │   │   ├── convert/route.ts         # LLM LaTeX generation (Edge, SSE)
+│   │   │   └── pro/                     # Pro pipeline API
+│   │   │       ├── parse/route.ts       # PDF extraction (Node runtime)
+│   │   │       ├── extract/route.ts     # LLM feature extraction (Edge, SSE)
+│   │   │       └── compile/route.ts     # LaTeX → PDF via TeXLive.net (Edge)
+│   │   ├── auth/page.tsx                # Sign in / Sign up
+│   │   ├── formats/page.tsx             # Format selection grid
+│   │   ├── upload/page.tsx              # File upload (standard)
+│   │   ├── custom-format/page.tsx       # Custom format builder
+│   │   ├── editor/page.tsx              # LaTeX editor + preview (standard)
+│   │   ├── pro/
+│   │   │   ├── upload/page.tsx          # PDF upload + format selection (Pro)
+│   │   │   └── editor/page.tsx          # LaTeX editor + compiled PDF (Pro)
+│   │   ├── page.tsx                     # Landing page
+│   │   ├── layout.tsx                   # Root layout + AuthProvider
+│   │   └── globals.css                  # Global styles
 │   ├── components/
-│   │   ├── GlowCard.tsx
-│   │   ├── Navbar.tsx               # Nav with user menu + logout
-│   │   ├── PageTransition.tsx
-│   │   └── TextReveal.tsx
+│   │   ├── Navbar.tsx                   # Navigation with Pro badge + user menu
+│   │   ├── GlowCard.tsx                 # Animated card component
+│   │   ├── PageTransition.tsx           # Route transition wrapper
+│   │   └── TextReveal.tsx               # Animated text reveal
 │   ├── context/
-│   │   └── AuthContext.tsx           # Auth state + JWT management
+│   │   └── AuthContext.tsx              # Auth state + JWT management
 │   └── lib/
-│       ├── constants.ts             # Format definitions
-│       ├── db.ts                    # MongoDB connection
-│       ├── jwt.ts                   # JWT helpers
-│       ├── models.ts                # LLM configs + master prompts
-│       ├── token-pool.ts            # HF token rotation
-│       └── user.ts                  # User schema + bcrypt
-├── .env.example
+│       ├── constants.ts                 # Format definitions + UI config
+│       ├── db.ts                        # MongoDB connection (lazy init)
+│       ├── jwt.ts                       # JWT sign/verify helpers
+│       ├── models.ts                    # LLM model configs + format prompts
+│       ├── token-pool.ts               # HF token rotation + fallback
+│       ├── user.ts                      # User schema + bcrypt
+│       └── pro/                         # Pro pipeline library
+│           ├── types.ts                 # Shared interfaces
+│           ├── pdf-extractor.ts         # PDF → text/images/tables/equations
+│           ├── llm-prompts.ts           # Structured extraction prompts
+│           └── latex-generators/        # Rule-based LaTeX generators
+│               ├── base.ts             # Shared utilities (escapeTeX, tables, figures, equations)
+│               ├── index.ts            # Generator registry
+│               ├── apa.ts             # APA 7th Edition
+│               ├── mla.ts             # MLA 9th Edition
+│               ├── ieee.ts            # IEEE Conference
+│               ├── chicago.ts         # Chicago Manual of Style
+│               ├── harvard.ts         # Harvard Referencing
+│               ├── ama.ts             # AMA
+│               ├── vancouver.ts       # Vancouver
+│               ├── acs.ts             # ACS
+│               └── cse.ts            # CSE
+├── .env.example                        # Environment variable template
 ├── .gitignore
+├── next.config.ts
 ├── package.json
 ├── tsconfig.json
 └── README.md
 ```
+
+---
+
+## Deployment
+
+### Vercel (Recommended)
+
+1. Push to GitHub
+2. Import the repository on [vercel.com](https://vercel.com)
+3. Add environment variables in Project Settings → Environment Variables:
+   - `HF_TOKEN_1` through `HF_TOKEN_5`
+   - `MONGODB_URI`
+   - `JWT_SECRET`
+4. Deploy — Vercel handles the build automatically
+
+The Edge runtime routes (`/api/convert`, `/api/pro/extract`, `/api/pro/compile`) bypass Vercel's 10-second Node.js timeout, enabling long-running SSE streams.
 
 ---
 
@@ -287,30 +368,26 @@ PaperPal/
 - [x] Format-specific master prompts for accurate LaTeX generation
 - [x] Real-time SSE progress tracking
 - [x] Anti-hallucination grounding rules
-- [x] Code-based reference formatting
+- [x] Code-based reference formatting (no LLM for bibliography)
 - [x] Split-pane LaTeX editor with live preview
-- [x] PDF export via browser print
 - [x] MongoDB + JWT authentication with bcrypt
-- [ ] Figure and table extraction from DOCX
-- [ ] Server-side LaTeX compilation for direct PDF download
+- [x] **Pro pipeline: PDF input with layout-aware extraction**
+- [x] **Rule-based LaTeX generators (9 formats, zero LLM hallucination)**
+- [x] **TeXLive.net integration for server-side PDF compilation**
+- [x] **PDF image, table, and equation extraction**
+- [x] **Section enrichment from full extracted text**
+- [x] **Truncated JSON repair + fallback parser**
+- [x] Vercel deployment with Edge runtime for streaming
 - [ ] Batch conversion (multiple papers)
 - [ ] Custom format builder UI
+- [ ] Full image embedding in compiled PDFs
+- [ ] Export to Overleaf with one click
 
 ---
 
 ## Team
 
-Built during a hackathon by a team of 5. Each member contributed a HuggingFace API token to the shared pool — that's how the multi-token architecture was born.
-
-<!--
-| Name | Role | GitHub |
-|------|------|--------|
-| Member 1 | Frontend / UI | [@handle](https://github.com/handle) |
-| Member 2 | LLM Pipeline | [@handle](https://github.com/handle) |
-| Member 3 | Document Parsing | [@handle](https://github.com/handle) |
-| Member 4 | Prompt Engineering | [@handle](https://github.com/handle) |
-| Member 5 | Integration / Testing | [@handle](https://github.com/handle) |
--->
+Built during a hackathon by a team of 5.
 
 ---
 

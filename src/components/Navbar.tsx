@@ -32,6 +32,7 @@ export default function Navbar() {
     { href: "/formats", label: "Formats" },
     { href: "/upload", label: "Convert" },
     { href: "/editor", label: "Editor" },
+    { href: "/pro/upload", label: "Pro", isPro: true },
   ];
 
   const handleLogout = async () => {
@@ -73,10 +74,23 @@ export default function Navbar() {
                 <Link
                   key={link.href}
                   href={link.href}
-                  className="relative px-4 py-2 text-sm font-medium text-ink-500 transition-colors hover:text-ink-800 group"
+                  className={`relative px-4 py-2 text-sm font-medium transition-colors group ${
+                    "isPro" in link && link.isPro
+                      ? "text-amber-600 hover:text-amber-700"
+                      : "text-ink-500 hover:text-ink-800"
+                  }`}
                 >
-                  {link.label}
-                  <span className="absolute bottom-0.5 left-4 right-4 h-px bg-accent scale-x-0 group-hover:scale-x-100 transition-transform duration-300 origin-left" />
+                  <span className="flex items-center gap-1.5">
+                    {link.label}
+                    {"isPro" in link && link.isPro && (
+                      <span className="rounded-full bg-gradient-to-r from-amber-400 to-orange-500 px-1.5 py-px text-[8px] font-bold text-white uppercase leading-none">
+                        new
+                      </span>
+                    )}
+                  </span>
+                  <span className={`absolute bottom-0.5 left-4 right-4 h-px scale-x-0 group-hover:scale-x-100 transition-transform duration-300 origin-left ${
+                    "isPro" in link && link.isPro ? "bg-amber-500" : "bg-accent"
+                  }`} />
                 </Link>
               ))}
             </div>
@@ -188,9 +202,18 @@ export default function Navbar() {
                   key={link.href}
                   href={link.href}
                   onClick={() => setMobileOpen(false)}
-                  className="block px-4 py-3 rounded-xl text-sm font-medium text-ink-600 hover:bg-ink-50 hover:text-ink-900 transition-colors"
+                  className={`flex items-center gap-2 px-4 py-3 rounded-xl text-sm font-medium transition-colors ${
+                    "isPro" in link && link.isPro
+                      ? "text-amber-600 hover:bg-amber-50 hover:text-amber-700"
+                      : "text-ink-600 hover:bg-ink-50 hover:text-ink-900"
+                  }`}
                 >
                   {link.label}
+                  {"isPro" in link && link.isPro && (
+                    <span className="rounded-full bg-gradient-to-r from-amber-400 to-orange-500 px-1.5 py-px text-[8px] font-bold text-white uppercase leading-none">
+                      new
+                    </span>
+                  )}
                 </Link>
               ))}
               <div className="pt-3 border-t border-ink-100 mt-3 space-y-2">
